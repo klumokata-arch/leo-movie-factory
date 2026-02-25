@@ -13,10 +13,11 @@ def render_movie():
         if isinstance(scenes, str):
             scenes = json.loads(scenes)
         
-        movie_title = data.get('title', 'final_movie').replace(" ", "_")
+        movie_title = data.get('title', 'final_movie').replace(" ", "_").replace("'", "")
         output_name = f"{movie_title}.mp4"
         
-        if not os.path.exists('temp'): os.makedirs('temp')
+        temp_dir = 'temp'
+        if not os.path.exists(temp_dir): os.makedirs(temp_dir)
         final_clips = []
 
         for i, scene in enumerate(scenes):
@@ -25,30 +26,37 @@ def render_movie():
             
             if not v_url or not a_url: continue
                 
-            v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
+            v_path, a_path = os.path.join(temp_dir, f"v_{i}.mp4"), os.path.join(temp_dir, f"a_{i}.mp3")
             
-            # Завантаження
-            with open(v_path, 'wb') as f: f.write(requests.get(v_url).content)
-            with open(a_path, 'wb') as f: f.write(requests.get(a_url).content)
+            # Скачуємо з перевіркою статусу
+            v_data = requests.get(v_url, timeout=30).content
+            a_data = requests.get(a_url, timeout=30).content
+            
+            with open(v_path, 'wb') as f: f.write(v_data)
+            with open(a_path, 'wb') as f: f.write(a_data)
                 
-            video = VideoFileClip(v_path)
+            # Завантажуємо кліпи з явним зазначенням використання ffmpeg
+            video = VideoFileClip(v_path, audio=False)
             audio = AudioFileClip(a_path)
 
-            # Ping-Pong ефект
+            # Ping-Pong Ефект
             reversed_video = video.fx(vfx.time_mirror)
             ping_pong_base = concatenate_videoclips([video, reversed_video])
             
-            # Зациклення
+            # Зациклення під довжину звуку
             final_clip = ping_pong_base.fx(vfx.loop, duration=audio.duration)
             final_clips.append(final_clip.set_audio(audio))
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
-            final_video.write_videofile(output_name, fps=24, codec="libx264", audio_codec="aac")
+            # Рендеримо у файл з максимальною сумісністю
+            final_video.write_videofile(output_name, fps=24, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True)
+            
             return send_file(output_name, as_attachment=True)
         
         return jsonify({"status": "Error", "message": "No clips processed"}), 400
     except Exception as e:
+        print(f"Error occurred: {str(e)}")
         return jsonify({"status": "Error", "message": str(e)}), 500
 
 if __name__ == "__main__":
