@@ -1,6 +1,7 @@
 import os, requests, json, threading, dropbox
 from flask import Flask, request, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
+from moviepy.video.fx.all import loop
 
 app = Flask(__name__)
 
@@ -20,48 +21,38 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             with open(v_path, 'wb') as f: f.write(requests.get(v_url).content)
             with open(a_path, 'wb') as f: f.write(requests.get(a_url).content)
                 
+            # Завантажуємо відео БЕЗ звуку (це стабільніше)
             video = VideoFileClip(v_path, audio=False)
             audio = AudioFileClip(a_path)
             
-            # ✅ СТАБІЛЬНИЙ ФІКС: простий zoom + stretch
-            duration_needed = audio.duration
+            # ПРОСТЕ ЗАЦИКЛЕННЯ (Замість Ping-Pong)
+            # Це працює миттєво і не видає помилку декодування
+            video = loop(video, duration=audio.duration)
             
-            # Спочатку фіксуємо розмір, потім розтягуємо
-            video_fixed = video.resize(height=720)
-            video_stretched = video_fixed.set_duration(duration_needed)
-            
-            # Легкий zoom ефект через crop+resize
-            video_zoomed = (video_stretched
-                .crop(x1=50, y1=50, x2=video.w-50, y2=video.h-50)  # Легкий crop
-                .resize((video.w, video.h)))  # Zoom back
-            
-            final_clips.append(video_zoomed.set_audio(audio))
-            
-            video.close()
-            audio.close()
-            os.remove(v_path)
-            os.remove(a_path)
+            final_clips.append(video.set_audio(audio))
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
-            final_video.write_videofile(
-                output_name, 
-                fps=24, 
-                codec="libx264", 
-                preset="ultrafast",
-                audio_codec="aac"  # Фіксуємо аудіо
-            )
-            final_video.close()
+            # Використовуємо ultrafast для швидкості та уникнення таймаутів
+            final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
             
-            # Dropbox
-            dbx = dropbox.Dropbox(dbx_token)
+            # ✅ ВИПРАВЛЕНО: використовуємо ТІЛЬКИ access token
+            print(f"Testing token before upload...")
+            dbx = dropbox.Dropbox(dbx_token)  # Правильний виклик для Access Token!
             account = dbx.users_get_current_account()
             print(f"✅ Token OK: {account.name}")
             
             with open(output_name, "rb") as f:
                 dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
-            print(f"DONE: {output_name}")
+            print(f"DONE: {output_name} uploaded to Dropbox")
+            
+            # Очищення тимчасових файлів
             os.remove(output_name)
+            for i in range(len(scenes)):
+                v_path = f"temp/v_{i}.mp4"
+                a_path = f"temp/a_{i}.mp3"
+                if os.path.exists(v_path): os.remove(v_path)
+                if os.path.exists(a_path): os.remove(a_path)
                 
     except Exception as e:
         print(f"FATAL ERROR: {str(e)}")
@@ -72,11 +63,13 @@ def render_movie():
     scenes = data.get('scenes', [])
     if isinstance(scenes, str): scenes = json.loads(scenes)
     
+    # 202 Accepted - миттєва відповідь для Make.com
     thread = threading.Thread(target=background_render, args=(
-        scenes, data.get('title', 'fairy_tale'), 
+        scenes, 
+        data.get('title', 'fairy_tale'), 
         os.environ.get('DROPBOX_ACCESS_TOKEN'),
-        os.environ.get('DROPBOX_APP_KEY'),
-        os.environ.get('DROPBOX_APP_SECRET')
+        os.environ.get('DROPBOX_APP_KEY'),      # Залишаємо (ігноруємо в функції)
+        os.environ.get('DROPBOX_APP_SECRET')    # Залишаємо (ігноруємо в функції)
     ))
     thread.start()
     return jsonify({"status": "Accepted"}), 202
