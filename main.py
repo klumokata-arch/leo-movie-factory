@@ -4,6 +4,7 @@ import json
 import threading
 import dropbox
 import shutil
+import subprocess
 from flask import Flask, request, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 import moviepy.video.fx.all as vfx
@@ -24,7 +25,9 @@ def background_render(scenes, movie_title, dbx_token):
                 print(f"Scene {i}: SKIPPING - missing URL")
                 continue
                 
-            v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
+            v_path = f"temp/v_{i}.mp4"
+            v_converted = f"temp/vc_{i}.mp4"
+            a_path = f"temp/a_{i}.mp3"
             
             with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
             with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
@@ -34,15 +37,26 @@ def background_render(scenes, movie_title, dbx_token):
             print(f"Scene {i}: video={v_size}b audio={a_size}b url={v_url}")
             
             if v_size < 10000:
-                print(f"Scene {i}: SKIPPING - video file too small ({v_size}b), likely corrupted")
+                print(f"Scene {i}: SKIPPING - video too small ({v_size}b)")
+                continue
+            if a_size < 500:
+                print(f"Scene {i}: SKIPPING - audio too small ({a_size}b)")
                 continue
 
-            if a_size < 500:
-                print(f"Scene {i}: SKIPPING - audio file too small ({a_size}b), likely corrupted")
-                continue
+            # Конвертуємо відео в стандартний H.264
+            result = subprocess.run(
+                ["ffmpeg", "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
+                capture_output=True, text=True
+            )
+            if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
+                print(f"Scene {i}: converted OK ({os.path.getsize(v_converted)}b)")
+                v_final = v_converted
+            else:
+                print(f"Scene {i}: conversion failed, using original. stderr: {result.stderr[-200:]}")
+                v_final = v_path
 
             try:
-                video = VideoFileClip(v_path, audio=False)
+                video = VideoFileClip(v_final, audio=False)
                 audio = AudioFileClip(a_path)
                 
                 speed_factor = video.duration / audio.duration
@@ -54,7 +68,6 @@ def background_render(scenes, movie_title, dbx_token):
                 continue
 
         print(f"Total clips loaded: {len(final_clips)}")
-
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
             final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
