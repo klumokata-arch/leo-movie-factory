@@ -1,7 +1,7 @@
 import os, requests, json
 from flask import Flask, request, send_file, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
-import moviepy.video.fx.all as vfx
+from moviepy.video.fx.all import loop
 
 app = Flask(__name__)
 
@@ -10,14 +10,12 @@ def render_movie():
     try:
         data = request.get_json(force=True)
         scenes = data.get('scenes', [])
-        if isinstance(scenes, str):
-            scenes = json.loads(scenes)
+        if isinstance(scenes, str): scenes = json.loads(scenes)
         
-        movie_title = data.get('title', 'final_movie').replace(" ", "_").replace("'", "")
+        movie_title = data.get('title', 'fairy_tale').replace(" ", "_")
         output_name = f"{movie_title}.mp4"
         
-        temp_dir = 'temp'
-        if not os.path.exists(temp_dir): os.makedirs(temp_dir)
+        if not os.path.exists('temp'): os.makedirs('temp')
         final_clips = []
 
         for i, scene in enumerate(scenes):
@@ -26,37 +24,30 @@ def render_movie():
             
             if not v_url or not a_url: continue
                 
-            v_path, a_path = os.path.join(temp_dir, f"v_{i}.mp4"), os.path.join(temp_dir, f"a_{i}.mp3")
-            
-            # Скачуємо з перевіркою статусу
-            v_data = requests.get(v_url, timeout=30).content
-            a_data = requests.get(a_url, timeout=30).content
-            
-            with open(v_path, 'wb') as f: f.write(v_data)
-            with open(a_path, 'wb') as f: f.write(a_data)
+            v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
+            with open(v_path, 'wb') as f: f.write(requests.get(v_url).content)
+            with open(a_path, 'wb') as f: f.write(requests.get(a_url).content)
                 
-            # Завантажуємо кліпи з явним зазначенням використання ffmpeg
+            # Завантажуємо відео без звуку (це швидше і стабільніше)
             video = VideoFileClip(v_path, audio=False)
             audio = AudioFileClip(a_path)
 
-            # Ping-Pong Ефект
-            reversed_video = video.fx(vfx.time_mirror)
-            ping_pong_base = concatenate_videoclips([video, reversed_video])
+            # ПРОСТЕ ЗАЦИКЛЕННЯ (Це працює швидко!)
+            # Якщо відео 5 сек, а звук 10 - воно просто повториться 2 рази
+            video = loop(video, duration=audio.duration)
             
-            # Зациклення під довжину звуку
-            final_clip = ping_pong_base.fx(vfx.loop, duration=audio.duration)
-            final_clips.append(final_clip.set_audio(audio))
+            final_clips.append(video.set_audio(audio))
 
         if final_clips:
+            # Склеюємо всі сцени
             final_video = concatenate_videoclips(final_clips, method="compose")
-            # Рендеримо у файл з максимальною сумісністю
-            final_video.write_videofile(output_name, fps=24, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True)
+            # Використовуємо 'ultrafast' пресет, щоб не було таймаутів
+            final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
             
             return send_file(output_name, as_attachment=True)
         
-        return jsonify({"status": "Error", "message": "No clips processed"}), 400
+        return jsonify({"status": "Error"}), 400
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
         return jsonify({"status": "Error", "message": str(e)}), 500
 
 if __name__ == "__main__":
