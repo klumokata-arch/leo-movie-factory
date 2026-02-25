@@ -2,7 +2,7 @@
 nixPkgs = ["python311", "ffmpeg"]
 
 [phases.install]
-cmds = ["python -m venv .venv && .venv/bin/pip install -r requirements.txt"]
+cmds = ["python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt"]
 
 [start]
 cmd = ".venv/bin/python main.py"
