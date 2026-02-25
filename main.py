@@ -14,32 +14,20 @@ app = Flask(__name__)
 render_lock = threading.Lock()
 
 def find_ffmpeg():
-    # Шукаємо в стандартних місцях
-    locations = [
-        sh.which("ffmpeg"),
-        "/usr/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/bin/ffmpeg",
-    ]
-    # Шукаємо в nix store
     try:
-        nix_search = subprocess.run(
-            ["find", "/nix/store", "-name", "ffmpeg", "-type", "f"],
-            capture_output=True, text=True, timeout=10
-        )
-        if nix_search.stdout.strip():
-            for path in nix_search.stdout.strip().split('\n'):
-                if path and 'bin/ffmpeg' in path:
-                    locations.insert(0, path)
+        import imageio_ffmpeg
+        path = imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"FFMPEG via imageio: {path}")
+        return path
     except Exception as e:
-        print(f"nix search error: {e}")
-
-    for path in locations:
+        print(f"imageio_ffmpeg error: {e}")
+    
+    for path in [sh.which("ffmpeg"), "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
         if path and os.path.exists(path):
             print(f"FFMPEG found: {path}")
             return path
     
-    print("FFMPEG NOT FOUND anywhere!")
+    print("FFMPEG NOT FOUND!")
     return None
 
 FFMPEG_PATH = find_ffmpeg()
@@ -47,9 +35,9 @@ FFMPEG_PATH = find_ffmpeg()
 def background_render(scenes, movie_title, dbx_token):
     with render_lock:
         try:
-            # Шукаємо ffmpeg знову на випадок перезапуску контейнера
             ffmpeg = find_ffmpeg()
-            
+            print(f"Using FFMPEG: {ffmpeg}")
+
             output_name = f"{movie_title.replace(' ', '_')}.mp4"
             if os.path.exists('temp'): shutil.rmtree('temp')
             os.makedirs('temp')
@@ -81,7 +69,6 @@ def background_render(scenes, movie_title, dbx_token):
                     print(f"Scene {i}: SKIPPING - audio too small")
                     continue
 
-                # Конвертуємо в стандартний H.264 якщо ffmpeg знайдено
                 v_final = v_path
                 if ffmpeg:
                     result = subprocess.run(
