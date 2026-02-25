@@ -1,7 +1,7 @@
 import os, requests, json, threading, dropbox
 from flask import Flask, request, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
-from moviepy.video.fx.all import loop
+import moviepy.video.fx.all as vfx
 
 app = Flask(__name__)
 
@@ -27,7 +27,8 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             
             # ПРОСТЕ ЗАЦИКЛЕННЯ (Замість Ping-Pong)
             # Це працює миттєво і не видає помилку декодування
-            video = loop(video, duration=audio.duration)
+            speed_factor = video.duration / audio.duration
+            video = video.fx(vfx.speedx, speed_factor)
             
             final_clips.append(video.set_audio(audio))
 
