@@ -1,6 +1,6 @@
 import os, requests, json
 from flask import Flask, request, send_file, jsonify
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx
 
 app = Flask(__name__)
 
@@ -28,15 +28,24 @@ def render_movie():
             with open(v_path, 'wb') as f: f.write(requests.get(v_url).content)
             with open(a_path, 'wb') as f: f.write(requests.get(a_url).content)
                 
-            v_clip = VideoFileClip(v_path)
-            a_clip = AudioFileClip(a_path)
-            final_clips.append(v_clip.set_audio(a_clip).set_duration(a_clip.duration))
+            video = VideoFileClip(v_path)
+            audio = AudioFileClip(a_path)
+
+            # --- ШЛЯХ 3: PING-PONG ЕФЕКТ ---
+            # Створюємо зворотну версію кліпу
+            reversed_video = video.fx(vfx.time_mirror)
+            # Склеюємо: вперед + назад (отримуємо 10 сек плавного руху)
+            ping_pong_base = concatenate_videoclips([video, reversed_video])
+            
+            # Зациклюємо цей пінг-понг, поки не закінчиться звук
+            final_clip = ping_pong_base.fx(vfx.loop, duration=audio.duration)
+            
+            final_clips.append(final_clip.set_audio(audio))
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
             final_video.write_videofile(output_name, fps=24, codec="libx264")
             
-            # ПОВЕРТАЄМО САМ ФАЙЛ
             return send_file(output_name, as_attachment=True)
         
         return jsonify({"status": "Error", "message": "No clips processed"}), 400
