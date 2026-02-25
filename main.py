@@ -10,34 +10,50 @@ import moviepy.video.fx.all as vfx
 
 app = Flask(__name__)
 
-# Функція рендеру (без змін логіки, тільки додано стабільність)
 def background_render(scenes, movie_title, dbx_token):
     try:
         output_name = f"{movie_title.replace(' ', '_')}.mp4"
         if os.path.exists('temp'): shutil.rmtree('temp')
         os.makedirs('temp')
-
         final_clips = []
         for i, scene in enumerate(scenes):
             v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
             a_url = scene.get('audio_url', scene.get('3', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
             
-            if not v_url or not a_url: continue
+            if not v_url or not a_url:
+                print(f"Scene {i}: SKIPPING - missing URL")
+                continue
                 
             v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
             
-            # Завантаження з тайм-аутом
-            with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=30).content)
-            with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=30).content)
+            with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
+            with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
             
-            if os.path.getsize(v_path) < 500: continue
+            v_size = os.path.getsize(v_path)
+            a_size = os.path.getsize(a_path)
+            print(f"Scene {i}: video={v_size}b audio={a_size}b url={v_url}")
+            
+            if v_size < 10000:
+                print(f"Scene {i}: SKIPPING - video file too small ({v_size}b), likely corrupted")
+                continue
 
-            video = VideoFileClip(v_path, audio=False)
-            audio = AudioFileClip(a_path)
-            
-            speed_factor = video.duration / audio.duration
-            video = video.fx(vfx.speedx, speed_factor)
-            final_clips.append(video.set_audio(audio))
+            if a_size < 500:
+                print(f"Scene {i}: SKIPPING - audio file too small ({a_size}b), likely corrupted")
+                continue
+
+            try:
+                video = VideoFileClip(v_path, audio=False)
+                audio = AudioFileClip(a_path)
+                
+                speed_factor = video.duration / audio.duration
+                video = video.fx(vfx.speedx, speed_factor)
+                final_clips.append(video.set_audio(audio))
+                print(f"Scene {i}: OK - duration={audio.duration:.1f}s")
+            except Exception as e:
+                print(f"Scene {i}: ERROR loading clip - {str(e)}")
+                continue
+
+        print(f"Total clips loaded: {len(final_clips)}")
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
@@ -50,6 +66,8 @@ def background_render(scenes, movie_title, dbx_token):
             os.remove(output_name)
             shutil.rmtree('temp')
             print(f"--- SUCCESS: {output_name} is in Dropbox ---")
+        else:
+            print("ERROR: No clips to render!")
     except Exception as e:
         print(f"ERROR DURING RENDER: {str(e)}")
 
@@ -65,7 +83,6 @@ def render_movie():
             print("CRITICAL: DROPBOX_ACCESS_TOKEN is not set in Railway!")
             return jsonify({"status": "error", "message": "Token missing"}), 500
 
-        # Починаємо роботу в фоні
         thread = threading.Thread(target=background_render, args=(
             scenes, data.get('title', 'movie'), token
         ))
@@ -75,7 +92,6 @@ def render_movie():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# Тестовий маршрут, щоб перевірити чи живе додаток
 @app.route('/')
 def home():
     return "Movie Factory is Online!"
