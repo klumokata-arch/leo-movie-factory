@@ -4,8 +4,5 @@ nixPkgs = ["python311", "ffmpeg"]
 [phases.install]
 cmds = ["python -m venv .venv && .venv/bin/pip install -r requirements.txt"]
 
-[phases.build]
-cmds = [".venv/bin/python -c \"import subprocess; print(subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True).stdout)\""]
-
 [start]
-cmd = ".venv/bin/python main.py"
+cmd = "ffmpeg -version && .venv/bin/python main.py"
