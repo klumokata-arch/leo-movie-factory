@@ -13,16 +13,48 @@ import moviepy.video.fx.all as vfx
 app = Flask(__name__)
 render_lock = threading.Lock()
 
-FFMPEG_PATH = sh.which("ffmpeg") or "/usr/bin/ffmpeg"
-print(f"FFMPEG path: {FFMPEG_PATH}")
+def find_ffmpeg():
+    # Шукаємо в стандартних місцях
+    locations = [
+        sh.which("ffmpeg"),
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/bin/ffmpeg",
+    ]
+    # Шукаємо в nix store
+    try:
+        nix_search = subprocess.run(
+            ["find", "/nix/store", "-name", "ffmpeg", "-type", "f"],
+            capture_output=True, text=True, timeout=10
+        )
+        if nix_search.stdout.strip():
+            for path in nix_search.stdout.strip().split('\n'):
+                if path and 'bin/ffmpeg' in path:
+                    locations.insert(0, path)
+    except Exception as e:
+        print(f"nix search error: {e}")
+
+    for path in locations:
+        if path and os.path.exists(path):
+            print(f"FFMPEG found: {path}")
+            return path
+    
+    print("FFMPEG NOT FOUND anywhere!")
+    return None
+
+FFMPEG_PATH = find_ffmpeg()
 
 def background_render(scenes, movie_title, dbx_token):
     with render_lock:
         try:
+            # Шукаємо ffmpeg знову на випадок перезапуску контейнера
+            ffmpeg = find_ffmpeg()
+            
             output_name = f"{movie_title.replace(' ', '_')}.mp4"
             if os.path.exists('temp'): shutil.rmtree('temp')
             os.makedirs('temp')
             final_clips = []
+
             for i, scene in enumerate(scenes):
                 v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
                 a_url = scene.get('audio_url', scene.get('3', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
@@ -49,18 +81,20 @@ def background_render(scenes, movie_title, dbx_token):
                     print(f"Scene {i}: SKIPPING - audio too small")
                     continue
 
-                # Конвертуємо в стандартний H.264
-                result = subprocess.run(
-                    [FFMPEG_PATH, "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
-                    capture_output=True, text=True
-                )
-
-                if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
-                    print(f"Scene {i}: converted OK")
-                    v_final = v_converted
+                # Конвертуємо в стандартний H.264 якщо ffmpeg знайдено
+                v_final = v_path
+                if ffmpeg:
+                    result = subprocess.run(
+                        [ffmpeg, "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
+                        capture_output=True, text=True
+                    )
+                    if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
+                        print(f"Scene {i}: converted OK")
+                        v_final = v_converted
+                    else:
+                        print(f"Scene {i}: conversion failed: {result.stderr[-150:]}")
                 else:
-                    print(f"Scene {i}: conversion failed, using original. err: {result.stderr[-100:]}")
-                    v_final = v_path
+                    print(f"Scene {i}: ffmpeg not found, using original")
 
                 try:
                     video = VideoFileClip(v_final, audio=False)
