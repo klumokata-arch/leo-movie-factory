@@ -36,12 +36,24 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             # Використовуємо ultrafast для швидкості та уникнення таймаутів
             final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
             
-            # ЗАВАНТАЖЕННЯ В DROPBOX
-            dbx = dropbox.Dropbox(oauth2_refresh_token=dbx_token, app_key=app_key, app_secret=app_secret)
+            # ✅ ВИПРАВЛЕНО: використовуємо ТІЛЬКИ access token
+            print(f"Testing token before upload...")
+            dbx = dropbox.Dropbox(dbx_token)  # Правильний виклик для Access Token!
+            account = dbx.users_get_current_account()
+            print(f"✅ Token OK: {account.name}")
+            
             with open(output_name, "rb") as f:
                 dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
             print(f"DONE: {output_name} uploaded to Dropbox")
             
+            # Очищення тимчасових файлів
+            os.remove(output_name)
+            for i in range(len(scenes)):
+                v_path = f"temp/v_{i}.mp4"
+                a_path = f"temp/a_{i}.mp3"
+                if os.path.exists(v_path): os.remove(v_path)
+                if os.path.exists(a_path): os.remove(a_path)
+                
     except Exception as e:
         print(f"FATAL ERROR: {str(e)}")
 
@@ -56,8 +68,8 @@ def render_movie():
         scenes, 
         data.get('title', 'fairy_tale'), 
         os.environ.get('DROPBOX_ACCESS_TOKEN'),
-        os.environ.get('DROPBOX_APP_KEY'),
-        os.environ.get('DROPBOX_APP_SECRET')
+        os.environ.get('DROPBOX_APP_KEY'),      # Залишаємо (ігноруємо в функції)
+        os.environ.get('DROPBOX_APP_SECRET')    # Залишаємо (ігноруємо в функції)
     ))
     thread.start()
     return jsonify({"status": "Accepted"}), 202
