@@ -4,6 +4,7 @@ import json
 import threading
 import dropbox
 import shutil
+import shutil as sh
 import subprocess
 from flask import Flask, request, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
@@ -11,6 +12,9 @@ import moviepy.video.fx.all as vfx
 
 app = Flask(__name__)
 render_lock = threading.Lock()
+
+FFMPEG_PATH = sh.which("ffmpeg") or "/usr/bin/ffmpeg"
+print(f"FFMPEG path: {FFMPEG_PATH}")
 
 def background_render(scenes, movie_title, dbx_token):
     with render_lock:
@@ -46,16 +50,16 @@ def background_render(scenes, movie_title, dbx_token):
                     continue
 
                 # Конвертуємо в стандартний H.264
-                subprocess.run(
-                    ["ffmpeg", "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
-                    capture_output=True
+                result = subprocess.run(
+                    [FFMPEG_PATH, "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
+                    capture_output=True, text=True
                 )
 
                 if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
                     print(f"Scene {i}: converted OK")
                     v_final = v_converted
                 else:
-                    print(f"Scene {i}: using original")
+                    print(f"Scene {i}: conversion failed, using original. err: {result.stderr[-100:]}")
                     v_final = v_path
 
                 try:
