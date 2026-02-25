@@ -4,8 +4,7 @@ import json
 import threading
 import dropbox
 import shutil
-import shutil as sh
-import subprocess
+import time
 from flask import Flask, request, jsonify
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 import moviepy.video.fx.all as vfx
@@ -13,105 +12,87 @@ import moviepy.video.fx.all as vfx
 app = Flask(__name__)
 render_lock = threading.Lock()
 
-def find_ffmpeg():
-    try:
-        import imageio_ffmpeg
-        path = imageio_ffmpeg.get_ffmpeg_exe()
-        print(f"FFMPEG via imageio: {path}")
-        return path
-    except Exception as e:
-        print(f"imageio_ffmpeg error: {e}")
-    
-    for path in [sh.which("ffmpeg"), "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
-        if path and os.path.exists(path):
-            print(f"FFMPEG found: {path}")
-            return path
-    
-    print("FFMPEG NOT FOUND!")
-    return None
-
-FFMPEG_PATH = find_ffmpeg()
-
 def background_render(scenes, movie_title, dbx_token):
+    # Lock гарантує, що одночасно рендериться ТІЛЬКИ ОДИН мультфільм
     with render_lock:
         try:
-            ffmpeg = find_ffmpeg()
-            print(f"Using FFMPEG: {ffmpeg}")
-
             output_name = f"{movie_title.replace(' ', '_')}.mp4"
             if os.path.exists('temp'): shutil.rmtree('temp')
             os.makedirs('temp')
+            
             final_clips = []
 
             for i, scene in enumerate(scenes):
+                # Пауза між сценами, щоб дати серверу "дихнути"
+                time.sleep(0.5)
+                
                 v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
                 a_url = scene.get('audio_url', scene.get('3', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
                 
-                if not v_url or not a_url:
-                    print(f"Scene {i}: SKIPPING - missing URL")
-                    continue
+                if not v_url or not a_url: continue
                     
-                v_path = f"temp/v_{i}.mp4"
-                v_converted = f"temp/vc_{i}.mp4"
-                a_path = f"temp/a_{i}.mp3"
+                v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
                 
+                # Завантаження
                 with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
                 with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
                 
                 v_size = os.path.getsize(v_path)
-                a_size = os.path.getsize(a_path)
-                print(f"Scene {i}: video={v_size}b audio={a_size}b")
+                print(f"Scene {i}: video={v_size}b - processing...")
                 
-                if v_size < 10000:
-                    print(f"Scene {i}: SKIPPING - video too small")
-                    continue
-                if a_size < 500:
-                    print(f"Scene {i}: SKIPPING - audio too small")
-                    continue
-
-                v_final = v_path
-                if ffmpeg:
-                    result = subprocess.run(
-                        [ffmpeg, "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
-                        capture_output=True, text=True
-                    )
-                    if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
-                        print(f"Scene {i}: converted OK")
-                        v_final = v_converted
-                    else:
-                        print(f"Scene {i}: conversion failed: {result.stderr[-150:]}")
-                else:
-                    print(f"Scene {i}: ffmpeg not found, using original")
+                if v_size < 10000: continue
 
                 try:
-                    video = VideoFileClip(v_final, audio=False)
+                    # ВАЖЛИВО: Видаляй logger, щоб не забивати пам'ять, і обмежуй потоки
+                    video = VideoFileClip(v_path, audio=False)
                     audio = AudioFileClip(a_path)
+                    
                     speed_factor = video.duration / audio.duration
-                    video = video.fx(vfx.speedx, speed_factor)
-                    final_clips.append(video.set_audio(audio))
+                    
+                    # Формуємо кліп
+                    clip = video.fx(vfx.speedx, speed_factor).set_audio(audio)
+                    final_clips.append(clip)
+                    
                     print(f"Scene {i}: OK - duration={audio.duration:.1f}s")
+                    
+                    # Закриваємо читання, але сам об'єкт залишаємо для concatenate
+                    # Це допоможе уникнути "Resource temporarily unavailable"
                 except Exception as e:
                     print(f"Scene {i}: ERROR - {str(e)}")
                     continue
 
-            print(f"Total clips: {len(final_clips)}")
+            print(f"Total clips ready: {len(final_clips)}. Starting final render...")
 
             if final_clips:
                 final_video = concatenate_videoclips(final_clips, method="compose")
-                final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
                 
+                # threads=2 не дасть Railway вбити процес за перевантаження CPU
+                final_video.write_videofile(
+                    output_name, 
+                    fps=24, 
+                    codec="libx264", 
+                    preset="ultrafast", 
+                    threads=2,
+                    logger=None
+                )
+                
+                print(f"Uploading to Dropbox...")
                 dbx = dropbox.Dropbox(dbx_token)
                 with open(output_name, "rb") as f:
                     dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
+                
+                # Повне очищення після успіху
+                final_video.close()
+                for c in final_clips: c.close()
                 
                 os.remove(output_name)
                 shutil.rmtree('temp')
                 print(f"--- SUCCESS: {output_name} ---")
             else:
-                print("ERROR: No clips to render!")
+                print("ERROR: No clips successfully processed!")
 
         except Exception as e:
-            print(f"ERROR DURING RENDER: {str(e)}")
+            print(f"FATAL ERROR DURING RENDER: {str(e)}")
 
 @app.route('/render', methods=['POST'])
 def render_movie():
@@ -138,5 +119,4 @@ def home():
     return "Movie Factory is Online!"
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
