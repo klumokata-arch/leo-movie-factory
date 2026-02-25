@@ -1,6 +1,6 @@
 flask
 requests
 moviepy==1.0.3
-proglog
 imageio==2.25.1
-imageio-ffmpeg
+imageio-ffmpeg==0.4.8
+proglog
