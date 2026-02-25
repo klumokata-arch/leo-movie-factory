@@ -20,26 +20,21 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             with open(v_path, 'wb') as f: f.write(requests.get(v_url).content)
             with open(a_path, 'wb') as f: f.write(requests.get(a_url).content)
                 
-            # Завантажуємо відео БЕЗ звуку
             video = VideoFileClip(v_path, audio=False)
             audio = AudioFileClip(a_path)
             
-            # 🎨 ВАРІАНТ 3: ПРОФЕСІЙНИЙ zoom + поворот + розтягування
+            # ✅ СПРОЩЕНИЙ ВАРІАНТ 3: zoom + resize (БЕЗ fl_image!)
             duration_needed = audio.duration
             
-            def zoom_rotate(gf, t):
-                z = 1 + 0.2 * (t / duration_needed)  # Плавний zoom 100% → 120%
-                rot = 2 * (t / duration_needed)      # Легкий поворот ~2°
-                return gf(t, zoom=z, rotation=rot)
-            
+            # Плавний zoom + розтягування
             video_enhanced = (video
-                .fl_image(lambda gf: zoom_rotate(gf, 0))
+                .resize(lambda t: 1 + 0.15 * (t / duration_needed))  # Zoom 15%
                 .set_duration(duration_needed)
-                .resize(height=720))  # Фіксована висота для консистентності
+                .resize(height=720))
             
             final_clips.append(video_enhanced.set_audio(audio))
             
-            # Очищення після обробки сцени
+            # Закриття
             video.close()
             audio.close()
             os.remove(v_path)
@@ -47,23 +42,19 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
-            # Використовуємо ultrafast для швидкості та уникнення таймаутів
             final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
-            
-            # Закриваємо кліпи для звільнення пам'яті
             final_video.close()
             
-            # ✅ Dropbox upload
-            print(f"Testing token before upload...")
+            # Dropbox
+            print(f"Testing token...")
             dbx = dropbox.Dropbox(dbx_token)
             account = dbx.users_get_current_account()
             print(f"✅ Token OK: {account.name}")
             
             with open(output_name, "rb") as f:
                 dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
-            print(f"DONE: {output_name} uploaded to Dropbox")
+            print(f"DONE: {output_name}")
             
-            # Очищення
             os.remove(output_name)
                 
     except Exception as e:
@@ -76,8 +67,7 @@ def render_movie():
     if isinstance(scenes, str): scenes = json.loads(scenes)
     
     thread = threading.Thread(target=background_render, args=(
-        scenes, 
-        data.get('title', 'fairy_tale'), 
+        scenes, data.get('title', 'fairy_tale'), 
         os.environ.get('DROPBOX_ACCESS_TOKEN'),
         os.environ.get('DROPBOX_APP_KEY'),
         os.environ.get('DROPBOX_APP_SECRET')
