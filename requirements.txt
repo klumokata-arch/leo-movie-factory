@@ -1,6 +1,8 @@
-flask
-requests
 moviepy==1.0.3
-dropbox
-setuptools
-imageio-ffmpeg
+dropbox==11.35.4
+Pillow==9.5.0
+requests==2.31.0
+Flask==2.3.3
+numpy==1.24.3
+imageio==2.31.6
+imageio-ffmpeg==0.4.9
