@@ -3,5 +3,6 @@ requests
 moviepy==1.0.3
 dropbox
 decorator
+setuptools
 imageio==2.25.0
 imageio-ffmpeg==0.4.9
