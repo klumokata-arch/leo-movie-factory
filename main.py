@@ -23,18 +23,20 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             video = VideoFileClip(v_path, audio=False)
             audio = AudioFileClip(a_path)
             
-            # ✅ СПРОЩЕНИЙ ВАРІАНТ 3: zoom + resize (БЕЗ fl_image!)
+            # ✅ СТАБІЛЬНИЙ ФІКС: простий zoom + stretch
             duration_needed = audio.duration
             
-            # Плавний zoom + розтягування
-            video_enhanced = (video
-                .resize(lambda t: 1 + 0.15 * (t / duration_needed))  # Zoom 15%
-                .set_duration(duration_needed)
-                .resize(height=720))
+            # Спочатку фіксуємо розмір, потім розтягуємо
+            video_fixed = video.resize(height=720)
+            video_stretched = video_fixed.set_duration(duration_needed)
             
-            final_clips.append(video_enhanced.set_audio(audio))
+            # Легкий zoom ефект через crop+resize
+            video_zoomed = (video_stretched
+                .crop(x1=50, y1=50, x2=video.w-50, y2=video.h-50)  # Легкий crop
+                .resize((video.w, video.h)))  # Zoom back
             
-            # Закриття
+            final_clips.append(video_zoomed.set_audio(audio))
+            
             video.close()
             audio.close()
             os.remove(v_path)
@@ -42,11 +44,16 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
 
         if final_clips:
             final_video = concatenate_videoclips(final_clips, method="compose")
-            final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
+            final_video.write_videofile(
+                output_name, 
+                fps=24, 
+                codec="libx264", 
+                preset="ultrafast",
+                audio_codec="aac"  # Фіксуємо аудіо
+            )
             final_video.close()
             
             # Dropbox
-            print(f"Testing token...")
             dbx = dropbox.Dropbox(dbx_token)
             account = dbx.users_get_current_account()
             print(f"✅ Token OK: {account.name}")
@@ -54,7 +61,6 @@ def background_render(scenes, movie_title, dbx_token, app_key, app_secret):
             with open(output_name, "rb") as f:
                 dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
             print(f"DONE: {output_name}")
-            
             os.remove(output_name)
                 
     except Exception as e:
