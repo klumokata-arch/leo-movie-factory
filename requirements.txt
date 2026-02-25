@@ -1,5 +1,5 @@
 moviepy==1.0.3
-dropbox==11.35.4
+dropbox==11.36.2
 Pillow==9.5.0
 requests==2.31.0
 Flask==2.3.3
