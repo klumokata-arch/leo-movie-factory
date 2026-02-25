@@ -10,79 +10,83 @@ from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 import moviepy.video.fx.all as vfx
 
 app = Flask(__name__)
+render_lock = threading.Lock()
 
 def background_render(scenes, movie_title, dbx_token):
-    try:
-        output_name = f"{movie_title.replace(' ', '_')}.mp4"
-        if os.path.exists('temp'): shutil.rmtree('temp')
-        os.makedirs('temp')
-        final_clips = []
-        for i, scene in enumerate(scenes):
-            v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-            a_url = scene.get('audio_url', scene.get('3', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-            
-            if not v_url or not a_url:
-                print(f"Scene {i}: SKIPPING - missing URL")
-                continue
+    with render_lock:
+        try:
+            output_name = f"{movie_title.replace(' ', '_')}.mp4"
+            if os.path.exists('temp'): shutil.rmtree('temp')
+            os.makedirs('temp')
+            final_clips = []
+            for i, scene in enumerate(scenes):
+                v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+                a_url = scene.get('audio_url', scene.get('3', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
                 
-            v_path = f"temp/v_{i}.mp4"
-            v_converted = f"temp/vc_{i}.mp4"
-            a_path = f"temp/a_{i}.mp3"
-            
-            with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
-            with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
-            
-            v_size = os.path.getsize(v_path)
-            a_size = os.path.getsize(a_path)
-            print(f"Scene {i}: video={v_size}b audio={a_size}b url={v_url}")
-            
-            if v_size < 10000:
-                print(f"Scene {i}: SKIPPING - video too small ({v_size}b)")
-                continue
-            if a_size < 500:
-                print(f"Scene {i}: SKIPPING - audio too small ({a_size}b)")
-                continue
+                if not v_url or not a_url:
+                    print(f"Scene {i}: SKIPPING - missing URL")
+                    continue
+                    
+                v_path = f"temp/v_{i}.mp4"
+                v_converted = f"temp/vc_{i}.mp4"
+                a_path = f"temp/a_{i}.mp3"
+                
+                with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
+                with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
+                
+                v_size = os.path.getsize(v_path)
+                a_size = os.path.getsize(a_path)
+                print(f"Scene {i}: video={v_size}b audio={a_size}b")
+                
+                if v_size < 10000:
+                    print(f"Scene {i}: SKIPPING - video too small")
+                    continue
+                if a_size < 500:
+                    print(f"Scene {i}: SKIPPING - audio too small")
+                    continue
 
-            # Конвертуємо відео в стандартний H.264
-            result = subprocess.run(
-                ["ffmpeg", "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
-                capture_output=True, text=True
-            )
-            if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
-                print(f"Scene {i}: converted OK ({os.path.getsize(v_converted)}b)")
-                v_final = v_converted
+                # Конвертуємо в стандартний H.264
+                subprocess.run(
+                    ["ffmpeg", "-i", v_path, "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-an", v_converted, "-y"],
+                    capture_output=True
+                )
+
+                if os.path.exists(v_converted) and os.path.getsize(v_converted) > 10000:
+                    print(f"Scene {i}: converted OK")
+                    v_final = v_converted
+                else:
+                    print(f"Scene {i}: using original")
+                    v_final = v_path
+
+                try:
+                    video = VideoFileClip(v_final, audio=False)
+                    audio = AudioFileClip(a_path)
+                    speed_factor = video.duration / audio.duration
+                    video = video.fx(vfx.speedx, speed_factor)
+                    final_clips.append(video.set_audio(audio))
+                    print(f"Scene {i}: OK - duration={audio.duration:.1f}s")
+                except Exception as e:
+                    print(f"Scene {i}: ERROR - {str(e)}")
+                    continue
+
+            print(f"Total clips: {len(final_clips)}")
+
+            if final_clips:
+                final_video = concatenate_videoclips(final_clips, method="compose")
+                final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
+                
+                dbx = dropbox.Dropbox(dbx_token)
+                with open(output_name, "rb") as f:
+                    dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
+                
+                os.remove(output_name)
+                shutil.rmtree('temp')
+                print(f"--- SUCCESS: {output_name} ---")
             else:
-                print(f"Scene {i}: conversion failed, using original. stderr: {result.stderr[-200:]}")
-                v_final = v_path
+                print("ERROR: No clips to render!")
 
-            try:
-                video = VideoFileClip(v_final, audio=False)
-                audio = AudioFileClip(a_path)
-                
-                speed_factor = video.duration / audio.duration
-                video = video.fx(vfx.speedx, speed_factor)
-                final_clips.append(video.set_audio(audio))
-                print(f"Scene {i}: OK - duration={audio.duration:.1f}s")
-            except Exception as e:
-                print(f"Scene {i}: ERROR loading clip - {str(e)}")
-                continue
-
-        print(f"Total clips loaded: {len(final_clips)}")
-        if final_clips:
-            final_video = concatenate_videoclips(final_clips, method="compose")
-            final_video.write_videofile(output_name, fps=24, codec="libx264", preset="ultrafast")
-            
-            dbx = dropbox.Dropbox(dbx_token)
-            with open(output_name, "rb") as f:
-                dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
-            
-            os.remove(output_name)
-            shutil.rmtree('temp')
-            print(f"--- SUCCESS: {output_name} is in Dropbox ---")
-        else:
-            print("ERROR: No clips to render!")
-    except Exception as e:
-        print(f"ERROR DURING RENDER: {str(e)}")
+        except Exception as e:
+            print(f"ERROR DURING RENDER: {str(e)}")
 
 @app.route('/render', methods=['POST'])
 def render_movie():
@@ -93,7 +97,6 @@ def render_movie():
         
         token = os.environ.get('DROPBOX_ACCESS_TOKEN')
         if not token:
-            print("CRITICAL: DROPBOX_ACCESS_TOKEN is not set in Railway!")
             return jsonify({"status": "error", "message": "Token missing"}), 500
 
         thread = threading.Thread(target=background_render, args=(
