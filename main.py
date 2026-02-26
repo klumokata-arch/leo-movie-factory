@@ -13,7 +13,6 @@ app = Flask(__name__)
 render_lock = threading.Lock()
 
 def background_render(scenes, movie_title, dbx_token):
-    # Lock гарантує, що одночасно рендериться ТІЛЬКИ ОДИН мультфільм
     with render_lock:
         try:
             output_name = f"{movie_title.replace(' ', '_')}.mp4"
@@ -23,7 +22,6 @@ def background_render(scenes, movie_title, dbx_token):
             final_clips = []
 
             for i, scene in enumerate(scenes):
-                # Пауза між сценами, щоб дати серверу "дихнути"
                 time.sleep(0.5)
                 
                 v_url = scene.get('video_url', scene.get('2', '')).replace('www.dropbox.com', 'dl.dropboxusercontent.com')
@@ -33,7 +31,7 @@ def background_render(scenes, movie_title, dbx_token):
                     
                 v_path, a_path = f"temp/v_{i}.mp4", f"temp/a_{i}.mp3"
                 
-                # Завантаження
+                # Завантаження з тайм-аутом
                 with open(v_path, 'wb') as f: f.write(requests.get(v_url, timeout=60).content)
                 with open(a_path, 'wb') as f: f.write(requests.get(a_url, timeout=60).content)
                 
@@ -43,20 +41,25 @@ def background_render(scenes, movie_title, dbx_token):
                 if v_size < 10000: continue
 
                 try:
-                    # ВАЖЛИВО: Видаляй logger, щоб не забивати пам'ять, і обмежуй потоки
                     video = VideoFileClip(v_path, audio=False)
                     audio = AudioFileClip(a_path)
                     
+                    # 1. ПІДГОНКА ШВИДКОСТІ: відео під довжину аудіо
                     speed_factor = video.duration / audio.duration
+                    video = video.fx(vfx.speedx, speed_factor)
                     
-                    # Формуємо кліп
-                    clip = video.fx(vfx.speedx, speed_factor).set_audio(audio)
+                    # 2. ФІКСАЦІЯ ТРИВАЛОСТІ: щоб уникнути мікро-обривів
+                    video = video.set_duration(audio.duration)
+                    
+                    # 3. НАКЛАДАННЯ ЗВУКУ
+                    clip = video.set_audio(audio)
+                    
+                    # 4. М'ЯКЕ ЗАТУХАННЯ: 0.1 сек в кінці кожної сцени прибирає "клацання"
+                    clip = clip.audio_fadeout(0.1)
+                    
                     final_clips.append(clip)
+                    print(f"Scene {i}: OK - duration={audio.duration:.2f}s")
                     
-                    print(f"Scene {i}: OK - duration={audio.duration:.1f}s")
-                    
-                    # Закриваємо читання, але сам об'єкт залишаємо для concatenate
-                    # Це допоможе уникнути "Resource temporarily unavailable"
                 except Exception as e:
                     print(f"Scene {i}: ERROR - {str(e)}")
                     continue
@@ -64,13 +67,14 @@ def background_render(scenes, movie_title, dbx_token):
             print(f"Total clips ready: {len(final_clips)}. Starting final render...")
 
             if final_clips:
+                # method="compose" забезпечує стабільність при склейці різних джерел
                 final_video = concatenate_videoclips(final_clips, method="compose")
                 
-                # threads=2 не дасть Railway вбити процес за перевантаження CPU
                 final_video.write_videofile(
                     output_name, 
                     fps=24, 
                     codec="libx264", 
+                    audio_codec="aac",
                     preset="ultrafast", 
                     threads=2,
                     logger=None
@@ -81,7 +85,7 @@ def background_render(scenes, movie_title, dbx_token):
                 with open(output_name, "rb") as f:
                     dbx.files_upload(f.read(), f"/{output_name}", mode=dropbox.files.WriteMode.overwrite)
                 
-                # Повне очищення після успіху
+                # Очищення ресурсів
                 final_video.close()
                 for c in final_clips: c.close()
                 
@@ -119,4 +123,5 @@ def home():
     return "Movie Factory is Online!"
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
